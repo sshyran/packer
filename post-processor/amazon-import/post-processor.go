@@ -235,13 +235,7 @@ func (p *PostProcessor) PostProcess(ui packer.Ui, artifact packer.Artifact) (pac
 
 		ui.Message(fmt.Sprintf("Waiting for AMI rename to complete (may take a while)"))
 
-		stateChange := awscommon.StateChangeConf{
-			Pending: []string{"pending"},
-			Target:  "available",
-			Refresh: awscommon.AMIStateRefreshFunc(ec2conn, *resp.ImageId),
-		}
-
-		if _, err := awscommon.WaitForState(&stateChange); err != nil {
+		if err := awscommon.WaitUntilAMIAvailable(ec2conn, *resp.ImageId); err != nil {
 			return nil, false, fmt.Errorf("Error waiting for AMI (%s): %s", *resp.ImageId, err)
 		}
 

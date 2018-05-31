@@ -10,7 +10,9 @@ import (
 	"strings"
 	"time"
 
+	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/aws/awserr"
+	"github.com/aws/aws-sdk-go/aws/request"
 	"github.com/aws/aws-sdk-go/service/ec2"
 	"github.com/hashicorp/packer/helper/multistep"
 )
@@ -35,35 +37,24 @@ type StateChangeConf struct {
 	Target    string
 }
 
-// AMIStateRefreshFunc returns a StateRefreshFunc that is used to watch
-// an AMI for state changes.
-func AMIStateRefreshFunc(conn *ec2.EC2, imageId string) StateRefreshFunc {
-	return func() (interface{}, string, error) {
-		resp, err := conn.DescribeImages(&ec2.DescribeImagesInput{
-			ImageIds: []*string{&imageId},
-		})
-		if err != nil {
-			if ec2err, ok := err.(awserr.Error); ok && ec2err.Code() == "InvalidAMIID.NotFound" {
-				// Set this to nil as if we didn't find anything.
-				resp = nil
-			} else if isTransientNetworkError(err) {
-				// Transient network error, treat it as if we didn't find anything
-				resp = nil
-			} else {
-				log.Printf("Error on AMIStateRefresh: %s", err)
-				return nil, "", err
-			}
-		}
+// Provide context and timeout/retry configuration to AWS SDK's waiter.
+func WaitUntilAMIAvailable(conn *ec2.EC2, imageId string) error {
+	// use env vars to read in the wait delay and the max amount of time to wait
+	delay := SleepSeconds()
+	timeoutSeconds := TimeoutSeconds()
+	// AWS sdk uses max attempts instead of a timeout; convert timeout into
+	// max attempts
+	maxAttempts := timeoutSeconds / delay
 
-		if resp == nil || len(resp.Images) == 0 {
-			// Sometimes AWS has consistency issues and doesn't see the
-			// AMI. Return an empty state.
-			return nil, "", nil
-		}
-
-		i := resp.Images[0]
-		return i, *i.State, nil
+	ImageInput := ec2.DescribeImagesInput{
+		ImageIds: []*string{&imageId},
 	}
+
+	err := conn.WaitUntilImageAvailableWithContext(aws.BackgroundContext(),
+		&ImageInput,
+		request.WithWaiterDelay(request.ConstantWaiterDelay(time.Duration(delay)*time.Second)),
+		request.WithWaiterMaxAttempts(maxAttempts))
+	return err
 }
 
 // InstanceStateRefreshFunc returns a StateRefreshFunc that is used to watch
