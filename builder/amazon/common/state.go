@@ -77,36 +77,25 @@ func WaitUntilInstanceTerminated(conn *ec2.EC2, instanceId string) error {
 	return err
 }
 
-// SpotRequestStateRefreshFunc returns a StateRefreshFunc that is used to watch
-// a spot request for state changes.
-func SpotRequestStateRefreshFunc(conn *ec2.EC2, spotRequestId string) StateRefreshFunc {
-	return func() (interface{}, string, error) {
-		resp, err := conn.DescribeSpotInstanceRequests(&ec2.DescribeSpotInstanceRequestsInput{
-			SpotInstanceRequestIds: []*string{&spotRequestId},
-		})
+// Provide context and timeout/retry configuration to AWS SDK's waiter.
+// This function works for both requesting and cancelling spot instances.
+func WaitUntilSpotRequestFulfilled(conn *ec2.EC2, spotRequestId string) error {
+	// use env vars to read in the wait delay and the max amount of time to wait
+	delay := SleepSeconds()
+	timeoutSeconds := TimeoutSeconds()
+	// AWS sdk uses max attempts instead of a timeout; convert timeout into
+	// max attempts
+	maxAttempts := timeoutSeconds / delay
 
-		if err != nil {
-			if ec2err, ok := err.(awserr.Error); ok && ec2err.Code() == "InvalidSpotInstanceRequestID.NotFound" {
-				// Set this to nil as if we didn't find anything.
-				resp = nil
-			} else if isTransientNetworkError(err) {
-				// Transient network error, treat it as if we didn't find anything
-				resp = nil
-			} else {
-				log.Printf("Error on SpotRequestStateRefresh: %s", err)
-				return nil, "", err
-			}
-		}
-
-		if resp == nil || len(resp.SpotInstanceRequests) == 0 {
-			// Sometimes AWS has consistency issues and doesn't see the
-			// SpotRequest. Return an empty state.
-			return nil, "", nil
-		}
-
-		i := resp.SpotInstanceRequests[0]
-		return i, *i.State, nil
+	spotRequestInput := ec2.DescribeSpotInstanceRequestsInput{
+		SpotInstanceRequestIds: []*string{&spotRequestId},
 	}
+
+	err := conn.WaitUntilSpotInstanceRequestFulfilledWithContext(aws.BackgroundContext(),
+		&spotRequestInput,
+		request.WithWaiterDelay(request.ConstantWaiterDelay(time.Duration(delay)*time.Second)),
+		request.WithWaiterMaxAttempts(maxAttempts))
+	return err
 }
 
 func ImportImageRefreshFunc(conn *ec2.EC2, importTaskId string) StateRefreshFunc {
