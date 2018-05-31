@@ -46,46 +46,35 @@ func WaitUntilAMIAvailable(conn *ec2.EC2, imageId string) error {
 	// max attempts
 	maxAttempts := timeoutSeconds / delay
 
-	ImageInput := ec2.DescribeImagesInput{
+	imageInput := ec2.DescribeImagesInput{
 		ImageIds: []*string{&imageId},
 	}
 
 	err := conn.WaitUntilImageAvailableWithContext(aws.BackgroundContext(),
-		&ImageInput,
+		&imageInput,
 		request.WithWaiterDelay(request.ConstantWaiterDelay(time.Duration(delay)*time.Second)),
 		request.WithWaiterMaxAttempts(maxAttempts))
 	return err
 }
 
-// InstanceStateRefreshFunc returns a StateRefreshFunc that is used to watch
-// an EC2 instance.
-func InstanceStateRefreshFunc(conn *ec2.EC2, instanceId string) StateRefreshFunc {
-	return func() (interface{}, string, error) {
-		resp, err := conn.DescribeInstances(&ec2.DescribeInstancesInput{
-			InstanceIds: []*string{&instanceId},
-		})
-		if err != nil {
-			if ec2err, ok := err.(awserr.Error); ok && ec2err.Code() == "InvalidInstanceID.NotFound" {
-				// Set this to nil as if we didn't find anything.
-				resp = nil
-			} else if isTransientNetworkError(err) {
-				// Transient network error, treat it as if we didn't find anything
-				resp = nil
-			} else {
-				log.Printf("Error on InstanceStateRefresh: %s", err)
-				return nil, "", err
-			}
-		}
+// Provide context and timeout/retry configuration to AWS SDK's waiter
+func WaitUntilInstanceTerminated(conn *ec2.EC2, instanceId string) error {
+	// use env vars to read in the wait delay and the max amount of time to wait
+	delay := SleepSeconds()
+	timeoutSeconds := TimeoutSeconds()
+	// AWS sdk uses max attempts instead of a timeout; convert timeout into
+	// max attempts
+	maxAttempts := timeoutSeconds / delay
 
-		if resp == nil || len(resp.Reservations) == 0 || len(resp.Reservations[0].Instances) == 0 {
-			// Sometimes AWS just has consistency issues and doesn't see
-			// our instance yet. Return an empty state.
-			return nil, "", nil
-		}
-
-		i := resp.Reservations[0].Instances[0]
-		return i, *i.State.Name, nil
+	instanceInput := ec2.DescribeInstancesInput{
+		InstanceIds: []*string{&instanceId},
 	}
+
+	err := conn.WaitUntilInstanceTerminatedWithContext(aws.BackgroundContext(),
+		&instanceInput,
+		request.WithWaiterDelay(request.ConstantWaiterDelay(time.Duration(delay)*time.Second)),
+		request.WithWaiterMaxAttempts(maxAttempts))
+	return err
 }
 
 // SpotRequestStateRefreshFunc returns a StateRefreshFunc that is used to watch
